@@ -2,12 +2,6 @@ name: Build Czech locale
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "en.json"
-      - "translate.py"
-      - ".github/workflows/translate.yml"
 
 permissions:
   contents: write
@@ -15,7 +9,7 @@ permissions:
 jobs:
   translate:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
 
@@ -23,8 +17,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install requests
-        run: pip install requests
+      - name: Install translator
+        run: pip install argostranslate
 
       - name: Generate Czech locale
         run: python translate.py
