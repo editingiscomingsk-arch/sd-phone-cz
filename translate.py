@@ -1,9 +1,10 @@
 import json, re, sys
-from argostranslate import package, translate
+from transformers import MarianMTModel, MarianTokenizer
 
 SRC = "en.json"
 DST = "cs.json"
 REPORT = "translation-report.txt"
+MODEL = "Helsinki-NLP/opus-mt-en-cs"
 
 PLACEHOLDER_RE = re.compile(r'\$\{[^{}]+\}|\{[^{}]+\}|%[sdif]|\\n')
 TECH_KEEP = {
@@ -27,43 +28,16 @@ def should_keep(s):
 def protect(text):
     vals = []
     def repl(m):
-        i = len(vals)
-        vals.append(m.group(0))
-        return chr(0xE000 + i)
+        token = f"PHX{len(vals)}XHP"
+        vals.append((token, m.group(0)))
+        return token
     return PLACEHOLDER_RE.sub(repl, text), vals
 
 def restore(text, vals):
-    for i, val in enumerate(vals):
-        text = text.replace(chr(0xE000 + i), val)
+    for token, val in vals:
+        text = text.replace(token, val)
+        text = text.replace(token.lower(), val)
     return text
-
-print("Downloading Argos Translate package index...")
-package.update_package_index()
-available = package.get_available_packages()
-matches = [p for p in available if p.from_code == "en" and p.to_code == "cs"]
-if not matches:
-    raise RuntimeError("No Argos Translate en->cs package available")
-
-pkg = matches[0]
-print(f"Installing translation model: {pkg}")
-path = pkg.download()
-package.install_from_path(path)
-
-langs = translate.get_installed_languages()
-from_lang = next(x for x in langs if x.code == "en")
-to_lang = next(x for x in langs if x.code == "cs")
-translator = from_lang.get_translation(to_lang)
-
-def tr_one(s):
-    if should_keep(s):
-        return s
-    safe, vals = protect(s)
-    out = translator.translate(safe)
-    out = restore(out, vals)
-    if sorted(PLACEHOLDER_RE.findall(out)) != sorted(PLACEHOLDER_RE.findall(s)):
-        print(f"PLACEHOLDER FALLBACK: {s!r}", file=sys.stderr)
-        return s
-    return out
 
 def collect(x, out):
     if isinstance(x, dict):
@@ -94,6 +68,10 @@ def flat(x, path=()):
     else:
         yield path, x
 
+print("Loading Czech translation model...", flush=True)
+tokenizer = MarianTokenizer.from_pretrained(MODEL)
+model = MarianMTModel.from_pretrained(MODEL)
+
 with open(SRC, "r", encoding="utf-8") as f:
     data = json.load(f)
 
@@ -101,11 +79,31 @@ vals = []
 collect(data, vals)
 uniq = list(dict.fromkeys(vals))
 mapping = {}
+todo = []
 
-for i, s in enumerate(uniq, 1):
-    mapping[s] = tr_one(s)
-    if i % 100 == 0:
-        print(f"Translated {i}/{len(uniq)}", flush=True)
+for s in uniq:
+    if should_keep(s):
+        mapping[s] = s
+    else:
+        safe, ph = protect(s)
+        todo.append((s, safe, ph))
+
+BATCH = 32
+for start in range(0, len(todo), BATCH):
+    chunk = todo[start:start+BATCH]
+    texts = [x[1] for x in chunk]
+    enc = tokenizer(texts, return_tensors="pt", padding=True, truncation=True, max_length=512)
+    gen = model.generate(**enc, max_length=512, num_beams=4)
+    outs = tokenizer.batch_decode(gen, skip_special_tokens=True)
+
+    for (original, _safe, ph), out in zip(chunk, outs):
+        out = restore(out, ph)
+        if sorted(PLACEHOLDER_RE.findall(original)) != sorted(PLACEHOLDER_RE.findall(out)):
+            mapping[original] = original
+        else:
+            mapping[original] = out
+
+    print(f"Translated {min(start+BATCH, len(todo))}/{len(todo)}", flush=True)
 
 result = replace(data, mapping)
 
