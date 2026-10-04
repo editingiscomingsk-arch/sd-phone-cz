@@ -18,7 +18,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install translator
-        run: pip install argostranslate
+        run: pip install transformers sentencepiece torch
 
       - name: Generate Czech locale
         run: python translate.py
@@ -34,6 +34,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes"
           else
-            git commit -m "Generate Czech SD-Phone locale"
+            git commit -m "Generate improved Czech SD-Phone locale"
             git push
           fi
